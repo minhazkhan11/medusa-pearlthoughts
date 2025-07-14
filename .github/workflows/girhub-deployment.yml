@@ -1,0 +1,117 @@
+name: Deploy Medusa Backend to ECS Fargate
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:  # Allows manual triggering from GitHub UI
+
+env:
+  AWS_REGION: eu-north-1
+  ECS_CLUSTER: medusa-cluster
+  ECS_SERVICE: medusa-service
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AWS credentials
+        run: |
+          aws sts get-caller-identity
+          echo "✅ AWS credentials verified successfully"
+
+      - name: Check repository structure
+        run: |
+          echo "📁 Repository contents:"
+          ls -la
+          echo ""
+          echo "🔍 Checking terraform directory:"
+          if [ -d "terraform" ]; then
+            echo "✅ Terraform directory found"
+            ls -la terraform/
+          else
+            echo "❌ Terraform directory not found"
+            echo "Creating terraform directory..."
+            mkdir -p terraform
+          fi
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+
+      - name: Terraform Init
+        run: |
+          cd terraform
+          terraform init
+
+      - name: Terraform Plan
+        run: |
+          cd terraform
+          terraform plan -var="database_url=${{ secrets.DATABASE_URL }}"
+
+      - name: Terraform Apply
+        run: |
+          cd terraform
+          terraform apply -auto-approve -var="database_url=${{ secrets.DATABASE_URL }}"
+
+      - name: Update ECS Service
+        run: |
+          echo "🚀 Updating ECS service..."
+          aws ecs update-service \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --service ${{ env.ECS_SERVICE }} \
+            --force-new-deployment
+          
+          echo "✅ ECS service update initiated successfully"
+
+      - name: Wait for deployment to complete
+        run: |
+          echo "⏳ Waiting for deployment to stabilize..."
+          aws ecs wait services-stable \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --services ${{ env.ECS_SERVICE }} \
+            --cli-read-timeout 1800 \
+            --cli-connect-timeout 60
+          
+          echo "🎉 Deployment completed successfully!"
+
+      - name: Get service status
+        run: |
+          echo "📊 Final service status:"
+          aws ecs describe-services \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --services ${{ env.ECS_SERVICE }} \
+            --query 'services[0].{Status:status,RunningCount:runningCount,DesiredCount:desiredCount}' \
+            --output table
+
+      - name: Get task information
+        run: |
+          echo "📋 Running tasks:"
+          TASK_ARNS=$(aws ecs list-tasks \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --service-name ${{ env.ECS_SERVICE }} \
+            --query 'taskArns' \
+            --output text)
+          
+          if [ ! -z "$TASK_ARNS" ]; then
+            aws ecs describe-tasks \
+              --cluster ${{ env.ECS_CLUSTER }} \
+              --tasks $TASK_ARNS \
+              --query 'tasks[0].{TaskArn:taskArn,LastStatus:lastStatus,HealthStatus:healthStatus}' \
+              --output table
+          else
+            echo "No running tasks found"
+          fi
+
