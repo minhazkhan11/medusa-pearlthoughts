@@ -1,0 +1,35 @@
+version: "3.8"
+
+services:
+  medusa:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "9000:9000"
+    env_file:
+      - .env
+    environment:
+      # #️⃣ #Override_localhost_URLs_for_EC2
+      - STORE_CORS=${STORE_CORS}
+      - ADMIN_CORS=${ADMIN_CORS}
+      - AUTH_CORS=${AUTH_CORS}
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - NODE_ENV=production
+    depends_on:
+      - redis
+    command: npm run start  # #️⃣ #Change_from_dev_to_start_for_production
+
+  redis:
+    image: redis:7.0
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    # #️⃣ #Optional_Redis_Configuration_for_EC2
+    command: redis-server --appendonly yes
+
+volumes:
+  redis-data:
+
