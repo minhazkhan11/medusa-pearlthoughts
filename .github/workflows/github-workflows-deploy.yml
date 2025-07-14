@@ -1,1 +1,65 @@
+name: Deploy Medusa Backend to ECS Fargate
+
+on:
+  push:
+    branches: [main]
+
+env:
+  AWS_REGION: eu-north-1
+  #️⃣ #Replace_with_your_AWS_ECR_URI
+  ECR_REPOSITORY: <your-aws-account-id>.dkr.ecr.eu-north-1.amazonaws.com/medusa-backend
+  ECS_CLUSTER: medusa-cluster         #️⃣ #If your cluster name is different, update here
+  ECS_SERVICE: medusa-service         #️⃣ #If your service name is different, update here
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      #️⃣ #Checkout_Repository_Code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      #️⃣ #Setup_NodeJS
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      #️⃣ #Configure_AWS_Credentials
+      #️⃣ #You must add AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in GitHub Secrets!
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}           #️⃣ #Set in GitHub Secrets
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}   #️⃣ #Set in GitHub Secrets
+          aws-region: $AWS_REGION
+
+      #️⃣ #Login_to_Amazon_ECR
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      #️⃣ #Build_Docker_Image
+      - name: Build Docker image
+        run: |
+          docker build -t $ECR_REPOSITORY:latest .
+          docker tag $ECR_REPOSITORY:latest $ECR_REPOSITORY:${{ github.sha }}
+
+      #️⃣ #Push_Image_to_ECR
+      - name: Push Docker image to ECR
+        run: |
+          docker push $ECR_REPOSITORY:latest
+          docker push $ECR_REPOSITORY:${{ github.sha }}
+
+      #️⃣ #Terraform_Deploy
+      - name: Terraform Init & Apply
+        run: |
+          cd terraform
+          terraform init
+          terraform apply -auto-approve -var="database_url=${{ secrets.DATABASE_URL }}"   #️⃣ #Set DATABASE_URL in GitHub Secrets
+
+      #️⃣ #Update_ECS_Service
+      - name: Update ECS Service
+        run: |
+          aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE --force-new-deployment
 
